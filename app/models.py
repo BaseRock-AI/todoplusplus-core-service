@@ -1,18 +1,24 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func
+from enum import Enum
+
+from sqlalchemy import Boolean, Column, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
 
-class UserRole:
+class UserRole(str, Enum):
     ADMIN = "admin"
     USER = "user"
 
 
-class DeleteRequestStatus:
+class DeleteRequestStatus(str, Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+
+
+class AttachmentCategory(str, Enum):
+    COMPLETION_PROOF = "COMPLETION_PROOF"
 
 
 class User(Base):
@@ -21,7 +27,17 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(100), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-    role = Column(String(20), nullable=False, default=UserRole.USER)
+    role = Column(
+        SAEnum(
+            UserRole,
+            name="user_role",
+            native_enum=False,
+            validate_strings=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=UserRole.USER,
+    )
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -36,13 +52,36 @@ class ToDoItem(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class ToDoAttachment(Base):
+    __tablename__ = "todo_attachments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    todo_id = Column(Integer, ForeignKey("todo_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    category = Column(
+        SAEnum(AttachmentCategory, name="attachment_category", native_enum=False, validate_strings=True),
+        nullable=False,
+        default=AttachmentCategory.COMPLETION_PROOF,
+    )
+    storage_key = Column(String(255), nullable=False, unique=True, index=True)
+    original_filename = Column(String(255), nullable=False)
+    content_type = Column(String(150), nullable=True)
+    size_bytes = Column(Integer, nullable=False)
+    uploaded_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class ToDoDeleteRequest(Base):
     __tablename__ = "todo_delete_requests"
 
     id = Column(Integer, primary_key=True, index=True)
     todo_id = Column(Integer, ForeignKey("todo_items.id", ondelete="CASCADE"), nullable=False, index=True)
     requested_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    status = Column(String(20), nullable=False, default=DeleteRequestStatus.PENDING, index=True)
+    status = Column(
+        SAEnum(DeleteRequestStatus, name="delete_request_status", native_enum=False, validate_strings=True),
+        nullable=False,
+        default=DeleteRequestStatus.PENDING,
+        index=True,
+    )
     reviewed_by_admin_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

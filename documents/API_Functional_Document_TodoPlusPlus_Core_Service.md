@@ -1,80 +1,122 @@
 # API Functional Document
 ## Project: ToDoPlusPlus Core Service
-## Version: 1.0
-## Date: 2026-03-05
+## Version: 1.1
+## Date: 2026-03-07
 
 ## 1. Purpose
-This document provides complete API-level functional and technical details for the ToDoPlusPlus Core Service, including endpoint contracts, schemas, validations, auth rules, business/technical rules, variables, and request/response examples.
+API-level functional and technical details for ToDoPlusPlus Core Service, including auth, role rules, CRUD flows, delete approval, multipart uploads, bulk imports, and attachment download.
 
-## 2. Base Technical Context
+## 2. Technical Context
 - Framework: FastAPI
 - Language: Python
 - Persistence: PostgreSQL (SQLAlchemy ORM)
-- Messaging: Kafka (confluent-kafka producer/consumer)
-- Auth: JWT bearer token (HS256 by default)
-- Default API base URL: `http://localhost:8081`
+- Messaging: Kafka
+- Auth: JWT bearer token
+- Storage: provider abstraction (`local` backend active)
+- Base URL: `http://localhost:8081`
 
 ## 3. Authentication and Authorization
 ### 3.1 Token Issuance
 - Endpoint: `POST /auth/login`
-- Input: username/password
-- Token payload claims:
-  - `sub`: user id (string form)
+- Claims:
+  - `sub`: user id
   - `role`: `admin` or `user`
   - `exp`: expiration timestamp
 
 ### 3.2 Protected APIs
-Bearer token required for all endpoints except `GET /health` and `POST /auth/login`.
+Bearer token required for all endpoints except:
+- `GET /health`
+- `POST /auth/login`
 
 ### 3.3 Role Rules
 - `admin`:
   - Can delete ToDo immediately.
   - Can approve/reject delete requests.
-  - Can list all delete requests.
+  - Can view all delete requests.
 - `user`:
-  - Cannot perform direct deletion.
-  - Creates pending delete requests.
-  - Can only list own delete requests.
+  - Cannot directly delete ToDo.
+  - Can create pending delete requests.
+  - Can view only own delete requests.
 
-### 3.4 Auth Failure Responses
-- Missing token: `401` + `{"detail":"Missing bearer token"}`
-- Invalid token: `401` + `{"detail":"Invalid token"}`
-- Inactive/missing user: `401` + `{"detail":"User not found or inactive"}`
-- Non-admin on admin endpoint: `403` + `{"detail":"Admin access required"}`
+## 4. Core Schemas
+### 4.1 ToDoCreate
+```json
+{
+  "name": "string (1..255)",
+  "completed": "boolean (optional, default false)"
+}
+```
 
-## 4. API Endpoints
+### 4.2 ToDoOut
+```json
+{
+  "id": 10,
+  "name": "Prepare sprint notes",
+  "completed": false,
+  "created_by_role": "user",
+  "created_by_username": "user"
+}
+```
 
-## 4.1 Health
+### 4.3 ToDoCompleteResponse
+```json
+{
+  "id": 10,
+  "completed": true
+}
+```
+
+### 4.4 ToDoBulkCreateResult
+```json
+{
+  "created_count": 2,
+  "ids": [11, 12]
+}
+```
+
+### 4.5 ToDoAttachmentOut
+```json
+{
+  "id": 3,
+  "todo_id": 10,
+  "filename": "proof.pdf",
+  "content_type": "application/pdf",
+  "size_bytes": 24517
+}
+```
+
+### 4.6 ToDoAttachmentUploadOut
+```json
+{
+  "attachment_id": 3,
+  "todo_id": 10,
+  "filename": "proof.pdf",
+  "content_type": "application/pdf",
+  "size_bytes": 24517
+}
+```
+
+## 5. Endpoints
+
+## 5.1 Health
 ### GET `/health`
-- Auth required: No
-- Purpose: Service heartbeat
-
-Success Response (200):
+- Auth: No
+- Response `200`:
 ```json
 {"status": "ok"}
 ```
 
-## 4.2 Auth
+## 5.2 Auth
 ### POST `/auth/login`
-- Auth required: No
-- Purpose: Authenticate user and issue JWT
-
-Request Schema:
+- Auth: No
+- Request:
 ```json
 {
-  "username": "string",
-  "password": "string"
+  "username": "admin",
+  "password": "password123"
 }
 ```
-
-Example Request:
-```bash
-curl -X POST http://localhost:8081/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"password123"}'
-```
-
-Success Response (200):
+- Response `200`:
 ```json
 {
   "access_token": "<jwt>",
@@ -88,15 +130,9 @@ Success Response (200):
 }
 ```
 
-Error Responses:
-- `401`: invalid credentials
-- `403`: user inactive
-
 ### GET `/auth/me`
-- Auth required: Yes
-- Purpose: Return current authenticated user profile
-
-Success Response (200):
+- Auth: Yes
+- Response `200`:
 ```json
 {
   "id": 1,
@@ -105,515 +141,245 @@ Success Response (200):
 }
 ```
 
-## 4.3 ToDo APIs
+## 5.3 ToDo CRUD
 ### GET `/todos`
-- Auth required: Yes
-- Purpose: List all ToDo items (ascending by `id`)
-
-Success Response (200):
-```json
-[
-  {
-    "id": 1,
-    "name": "task a",
-    "completed": false,
-    "created_by_role": "admin",
-    "created_by_username": "admin"
-  }
-]
-```
+- Auth: Yes
+- Query param:
+  - `scope` (optional): `all` (default) | `done` | `pending`
+- Behavior:
+  - `all`: returns all todos
+  - `done`: returns only `completed=true`
+  - `pending`: returns only `completed=false`
+- Response `200`: `ToDoOut[]`
 
 ### GET `/todos/{todo_id}`
-- Auth required: Yes
-- Path variable: `todo_id` (integer)
-- Purpose: Fetch specific ToDo
-
-Success Response (200):
-```json
-{
-  "id": 1,
-  "name": "task a",
-  "completed": false,
-  "created_by_role": "admin",
-  "created_by_username": "admin"
-}
-```
-
-Not Found (404):
-```json
-{"detail": "ToDo item 999 not found"}
-```
+- Auth: Yes
+- Path param: `todo_id` (int)
+- Response `200`: `ToDoOut`
+- Error `404`: todo not found
 
 ### POST `/todos`
-- Auth required: Yes
-- Purpose: Create ToDo and trigger async pipeline
-
-Request Schema:
-```json
-{
-  "name": "string (1..255)",
-  "completed": "boolean (optional, default false)"
-}
-```
-
-Example Request:
-```bash
-curl -X POST http://localhost:8081/todos \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Prepare sprint notes","completed":false}'
-```
-
-Success Response (201):
-```json
-{
-  "id": 10,
-  "name": "Prepare sprint notes",
-  "completed": false,
-  "created_by_role": "user",
-  "created_by_username": "user"
-}
-```
-
-Side Effects:
-- Inserts row into `todo_items`
-- Publishes to Kafka topic `TOPIC_JIRA` with payload:
-```json
-{"id":10,"name":"Prepare sprint notes","completed":false}
-```
-- Publishes audit event to `TOPIC_AUDIT`:
-```json
-{
-  "type": "TODO",
-  "value": "{\"id\": 10, \"name\": \"Prepare sprint notes\", \"completed\": false}"
-}
-```
+- Auth: Yes
+- Request: `ToDoCreate`
+- Response `201`: `ToDoOut`
+- Side effects:
+  - Persists todo in DB
+  - Publishes todo event to Jira topic
+  - Publishes audit event to Audit topic
 
 ### PUT `/todos/{todo_id}`
-- Auth required: Yes
-- Purpose: Partial update of ToDo
-
-Request Schema:
-```json
-{
-  "name": "string (optional, 1..255)",
-  "completed": "boolean (optional)"
-}
-```
-
-Example Request:
-```bash
-curl -X PUT http://localhost:8081/todos/10 \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"completed":true}'
-```
-
-Success Response (200):
-```json
-{
-  "id": 10,
-  "name": "Prepare sprint notes",
-  "completed": true,
-  "created_by_role": "user",
-  "created_by_username": "user"
-}
-```
-
-Not Found (404):
-```json
-{"detail": "ToDo item 10 not found"}
-```
+- Auth: Yes
+- Request: partial fields of `ToDoCreate`
+- Response `200`: `ToDoOut`
+- Error `404`: todo not found
 
 ### DELETE `/todos/{todo_id}`
-- Auth required: Yes
-- Purpose: Delete or request delete depending on role
+- Auth: Yes
+- Response `200`: delete action payload
+- Behavior:
+  - `admin`: immediate delete
+  - `user`: pending delete request creation/reuse
 
-Behavior:
-- If caller role is `admin`: immediate deletion
-- If caller role is `user`: create/find pending delete request
-
-Admin Success Response (200):
+### DELETE `/todos/clear`
+- Auth: Yes
+- Query param:
+  - `scope` (optional): `all` (default) | `done` | `pending`
+- Behavior:
+  - `all`: deletes all todos
+  - `done`: deletes todos with `completed=true`
+  - `pending`: deletes todos with `completed=false`
+  - Allowed for all authenticated roles; no delete-approval workflow is used.
+- Response `200`:
 ```json
 {
-  "action": "deleted",
-  "message": "ToDo item 10 deleted",
-  "delete_request_id": null
+  "scope": "pending",
+  "deleted_count": 4
 }
 ```
 
-User (new pending request) Response (200):
-```json
-{
-  "action": "PENDING",
-  "message": "Delete request submitted for admin approval",
-  "delete_request_id": 5
-}
-```
+## 5.4 Complete Task
+### POST `/todos/{todo_id}/complete`
+- Auth: Yes
+- Behavior:
+  - Marks todo `completed=true`
+- Response `200`: `ToDoCompleteResponse`
+- Errors:
+  - `404` if todo not found
 
-User (already pending) Response (200):
-```json
-{
-  "action": "pending_approval",
-  "message": "Delete request already pending admin approval",
-  "delete_request_id": 5
-}
-```
-
-Not Found (404):
-```json
-{"detail": "ToDo item 10 not found"}
-```
-
-## 4.4 Delete Request APIs
-### GET `/delete-requests`
-- Auth required: Yes
-- Query variable: `status` (optional string)
-- Purpose: List delete requests
-
-Role behavior:
-- Admin: returns all requests (optionally filtered by status)
-- User: returns only own requests (optionally filtered)
-
-Example Request:
+Example:
 ```bash
-curl -X GET "http://localhost:8081/delete-requests?status=PENDING" \
+curl -X POST http://localhost:8081/todos/10/complete \
   -H "Authorization: Bearer <token>"
 ```
 
-Success Response (200):
+## 5.5 Bulk Import
+### POST `/todos/bulk-import`
+- Auth: Yes
+- Content type: `multipart/form-data` or `application/json`
+- Request options:
+  - `multipart/form-data`: `file` (required) as `.json`, `.csv`, or `.xlsx`
+  - `application/json`: body as a JSON array of todo objects, or `{"items":[...]}`
+- Behavior:
+  - Parses uploaded file
+  - Creates multiple ToDos under current user
+  - Publishes todo + audit messages for each created item
+- Response `201`: `ToDoBulkCreateResult`
+- Errors:
+  - `422` invalid format/content
+  - `413` file too large
+
+Format rules (strict):
+- CSV and XLSX must include a header row with a `name` column (case-insensitive).
+- `completed` is optional; if present, accepted values are `true/false/1/0/yes/no` (also `y/n`).
+- Rows with both `name` and `completed` empty are skipped.
+- Any non-empty row with invalid data returns `422` with row/item context.
+
+JSON file format options:
 ```json
 [
-  {
-    "id": 5,
-    "todo_id": 10,
-    "requested_by_user_id": 2,
-    "status": "PENDING",
-    "reviewed_by_admin_id": null,
-    "reviewed_at": null,
-    "created_at": "2026-03-05T06:00:00.000000+00:00"
-  }
+  {"name":"task 1","completed":false},
+  {"name":"task 2","completed":true}
 ]
 ```
-
-### POST `/delete-requests/{request_id}/approve`
-- Auth required: Yes (admin only)
-- Path variable: `request_id` (integer)
-- Purpose: Approve pending request and delete target ToDo
-
-Success Response (200):
+or
 ```json
 {
-  "id": 5,
-  "status": "APPROVED",
-  "todo_id": 10
-}
-```
-
-Errors:
-- `404` if request missing
-- `404` if linked ToDo missing at approval time
-- `409` if request already processed
-- `403` if non-admin
-
-### POST `/delete-requests/{request_id}/reject`
-- Auth required: Yes (admin only)
-- Path variable: `request_id` (integer)
-- Purpose: Reject pending request
-
-Success Response (200):
-```json
-{
-  "id": 5,
-  "status": "REJECTED",
-  "todo_id": 10
-}
-```
-
-Errors:
-- `404` if request missing
-- `409` if request already processed
-- `403` if non-admin
-
-## 5. Request/Response Schema Definitions
-
-## 5.1 `LoginRequest`
-```json
-{
-  "username": "string",
-  "password": "string"
-}
-```
-
-## 5.2 `AuthUser`
-```json
-{
-  "id": "integer",
-  "username": "string",
-  "role": "string"
-}
-```
-
-## 5.3 `TokenResponse`
-```json
-{
-  "access_token": "string",
-  "token_type": "bearer",
-  "expires_in_seconds": "integer",
-  "user": "AuthUser"
-}
-```
-
-## 5.4 `ToDoCreate`
-```json
-{
-  "name": "string, required, min 1, max 255",
-  "completed": "boolean, optional, default false"
-}
-```
-
-## 5.5 `ToDoUpdate`
-```json
-{
-  "name": "string, optional, min 1, max 255",
-  "completed": "boolean, optional"
-}
-```
-
-## 5.6 `ToDoOut`
-```json
-{
-  "id": "integer",
-  "name": "string",
-  "completed": "boolean",
-  "created_by_role": "literal(admin|user)",
-  "created_by_username": "string|null"
-}
-```
-
-## 5.7 `DeleteTodoActionResponse`
-```json
-{
-  "action": "string",
-  "message": "string",
-  "delete_request_id": "integer|null"
-}
-```
-
-## 5.8 `DeleteRequestDecisionResponse`
-```json
-{
-  "id": "integer",
-  "status": "string",
-  "todo_id": "integer"
-}
-```
-
-## 5.9 `ToDoDeleteRequestOut`
-```json
-{
-  "id": "integer",
-  "todo_id": "integer",
-  "requested_by_user_id": "integer",
-  "status": "string",
-  "reviewed_by_admin_id": "integer|null",
-  "reviewed_at": "datetime|null",
-  "created_at": "datetime"
-}
-```
-
-## 6. Validation and Error Model
-- Pydantic validation errors produce `422 Unprocessable Entity`.
-- Typical validation body:
-```json
-{
-  "detail": [
-    {
-      "type": "string_too_short",
-      "loc": ["body", "name"],
-      "msg": "String should have at least 1 character",
-      "input": "",
-      "ctx": {"min_length": 1}
-    }
+  "items": [
+    {"name":"task 1","completed":false},
+    {"name":"task 2","completed":true}
   ]
 }
 ```
 
-Application-level errors:
-- 401 authentication/authorization token issues.
-- 403 forbidden role action.
-- 404 not found resources.
-- 409 conflicting state transition for processed delete request.
-
-## 7. Business and Technical Rules
-- ToDo list is globally visible to authenticated users.
-- Creator metadata is always returned (`created_by_role`, `created_by_username`).
-- `created_by_role` defaults to `admin` in mapper if role cannot be resolved.
-- Duplicate pending delete request by same user for same todo is not created.
-- Only `PENDING` requests can transition to `APPROVED` or `REJECTED`.
-- Approving a request deletes the todo and sets review metadata atomically in one transaction.
-
-## 8. Data Model (Database)
-### 8.1 `users`
-- `id` (PK)
-- `username` (unique, indexed, not null)
-- `password_hash` (not null)
-- `role` (`admin`/`user` expected)
-- `is_active` (bool)
-- `created_at`
-
-### 8.2 `todo_items`
-- `id` (PK)
-- `name` (varchar 255, not null)
-- `completed` (bool, default false)
-- `created_by_user_id` (FK users.id, nullable, on delete set null)
-- `created_at`
-
-### 8.3 `todo_delete_requests`
-- `id` (PK)
-- `todo_id` (FK todo_items.id, on delete cascade)
-- `requested_by_user_id` (FK users.id, on delete cascade)
-- `status` (`PENDING`, `APPROVED`, `REJECTED`)
-- `reviewed_by_admin_id` (FK users.id, nullable)
-- `reviewed_at` (nullable)
-- `created_at`
-
-### 8.4 `audits`
-- `id` (PK)
-- `type` (varchar 100)
-- `value` (text)
-- `created_at`
-
-## 9. Event-Driven Functional Details
-
-## 9.1 Kafka Topics (Configurable)
-- `TOPIC_JIRA` default: `todo-items-jira`
-- `TOPIC_EMAIL` default: `todo-items-email`
-- `TOPIC_AUDIT` default: `todo-items-audit`
-
-## 9.2 Producer Rules
-- Key: ToDo ID as string
-- Value: JSON serialized payload
-- Flush: producer flushes on each publish call
-
-## 9.3 Consumer Groups
-- Jira consumer group: `todo-jira-consumer-group`
-- Email consumer group: `todo-email-consumer-group`
-- Audit consumer group: `todo-audit-consumer-group`
-
-## 9.4 Jira Handler Contract
-Input payload:
+Strict JSON examples:
 ```json
-{"id":10,"name":"Prepare sprint notes","completed":false}
+[
+  {"name":"Write report","completed":false},
+  {"name":"Send email","completed":true}
+]
 ```
-
-Output to email topic (`JiraToDoItem`):
+or
 ```json
 {
-  "id": 10,
-  "name": "Prepare sprint notes",
-  "completed": false,
-  "jira_id": "10000",
-  "key": "TODO-123",
-  "url": "https://your-domain.atlassian.net/rest/api/3/issue/10000"
+  "items": [
+    {"name":"Write report","completed":false},
+    {"name":"Send email","completed":true}
+  ]
 }
 ```
 
-If Jira disabled, output still sent with Jira fields as null.
+CSV expected headers:
+- `name` (required)
+- `completed` (optional; accepted values like `true/false/1/0/yes/no`)
 
-## 9.5 Email Handler Contract
-Input: `JiraToDoItem`
-- Subject format: `New ToDo Item Created-> <todo_name>`
-- Body includes serialized jira item JSON
-
-Audit outputs to audit topic:
-- Email disabled: `type=EMAIL_SKIPPED`
-- Email success: `type=EMAIL`
-- Email failure: `type=ERROR`
-
-## 9.6 Audit Handler Contract
-Input payload:
-```json
-{"type":"EMAIL","value":"..."}
+CSV example:
+```csv
+name,completed
+Write report,false
+Send email,true
 ```
 
-Behavior: persists into `audits` table.
+XLSX expected headers (first row):
+- `name` (required)
+- `completed` (optional)
 
-## 10. Variables and Configuration
-All values are environment-driven (`.env`).
+Example:
+```bash
+curl -X POST http://localhost:8081/todos/bulk-import \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@./todos.xlsx"
+```
 
-Application:
-- `APP_NAME`
-- `APP_HOST`
-- `APP_PORT`
-- `CORS_ALLOWED_ORIGINS` (comma-separated)
+Example (direct JSON body):
+```bash
+curl -X POST http://localhost:8081/todos/bulk-import \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '[{"name":"task 1","completed":false},{"name":"task 2","completed":true}]'
+```
 
-Identity and bootstrap users:
-- `APP_AUTH_USER` (admin username)
-- `APP_AUTH_PASSWORD` (admin password)
-- `DEFAULT_USER_USERNAME`
-- `DEFAULT_USER_PASSWORD`
+Sample download endpoints (for UI "Download format" buttons):
+- `GET /todos/bulk-import/examples/tabular?format=csv`
+- `GET /todos/bulk-import/examples/tabular?format=xlsx`
+- `GET /todos/bulk-import/examples/json`
+- Auth: Yes
+- Response: downloadable attachment with a valid import template for each format
 
-JWT:
-- `JWT_SECRET_KEY`
-- `JWT_ALGORITHM` (default `HS256`)
-- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`
+Example:
+```bash
+curl -L "http://localhost:8081/todos/bulk-import/examples/tabular?format=csv" \
+  -H "Authorization: Bearer <token>" \
+  -o bulk-import-example.csv
+```
 
-Database:
-- `DATABASE_URL`
+## 5.6 Attachments (Independent of Complete Status)
+### POST `/todos/{todo_id}/attachments/upload`
+- Auth: Yes
+- Content type: `multipart/form-data`
+- Part:
+  - `file` (required): any file type
+- Behavior:
+  - Stores attachment for the todo without changing `completed` status
+- Response `201`: `ToDoAttachmentUploadOut`
+- Note: use `attachment_id` from this response in download URL.
+- Errors:
+  - `404` if todo not found
+  - `413` if file exceeds configured max upload size
 
-Kafka:
-- `KAFKA_BOOTSTRAP_SERVERS`
-- `TOPIC_JIRA`
-- `TOPIC_EMAIL`
-- `TOPIC_AUDIT`
+Example:
+```bash
+curl -X POST http://localhost:8081/todos/10/attachments/upload \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@./proof.pdf"
+```
 
-Jira integration:
-- `JIRA_ENABLED`
-- `JIRA_API_URL`
-- `JIRA_API_EMAIL`
-- `JIRA_API_TOKEN`
-- `JIRA_PROJECT_KEY`
-- `JIRA_ISSUE_TYPE`
+### GET `/todos/{todo_id}/attachments/{attachment_id}`
+- Auth: Yes
+- Response `200`: `ToDoAttachmentOut`
+- Error `404`: attachment not found or does not belong to todo
 
-Email integration:
-- `EMAIL_ENABLED`
-- `EMAIL_SMTP_HOST`
-- `EMAIL_SMTP_PORT`
-- `EMAIL_SMTP_USERNAME`
-- `EMAIL_SMTP_PASSWORD`
-- `EMAIL_FROM`
-- `EMAIL_RECIPIENT`
+### GET `/todos/{todo_id}/attachments/{attachment_id}/download`
+- Auth: Yes
+- Response `200`: binary stream with `Content-Disposition: attachment; filename="..."`
+- Errors:
+  - `404` if metadata missing
+  - `404` if physical file missing from storage backend
 
-## 11. Seeded Users and Runtime Initialization
-At startup:
-- Tables are created if missing.
-- Migration ensures `todo_items.created_by_user_id` and index/FK.
-- Default users are created if absent:
-  - Admin from `APP_AUTH_USER` / `APP_AUTH_PASSWORD`
-  - Normal user from `DEFAULT_USER_USERNAME` / `DEFAULT_USER_PASSWORD`
-- Kafka consumers are started.
+Example:
+```bash
+curl -L "http://localhost:8081/todos/10/attachments/3/download" \
+  -H "Authorization: Bearer <token>" \
+  -o proof.pdf
+```
 
-## 12. Observability and Logs
-Structured event logs exist for:
-- App startup/shutdown and mode
-- ToDo create request/success/failure
-- Kafka publish and delivery
-- Consumer init/start/message/failure/stop
-- Jira create attempt/success/failure/skipped
-- Email send attempt/success/failure/skipped
-- Audit write success/failure
+## 5.7 Delete Requests
+### GET `/delete-requests?status=PENDING`
+- Auth: Yes
+- Query param: `status` (optional)
+- `admin`: all requests
+- `user`: own requests only
 
-## 13. Known Edge Cases and Implementation Notes
-- `GET /delete-requests?status=<value>` accepts raw string; invalid values do not raise validation error but may return empty set.
-- `DELETE /todos/{id}` returns 200 with action payload (not 204).
-- If a token has valid signature but user is inactive/deleted, API returns 401.
-- Approve operation fails with 404 if todo already missing.
+### POST `/delete-requests/{request_id}/approve`
+- Auth: Yes (admin)
+- Response `200`: approved status payload
+- Errors: `403`, `404`, `409`
 
-## 14. End-to-End Example Flow
-1. Login as user -> receive token.
-2. Create ToDo -> returns created row and triggers async events.
-3. User tries delete -> request becomes `PENDING`.
-4. Admin lists pending requests.
-5. Admin approves -> request status `APPROVED`, todo removed.
-6. Audit table includes TODO + email workflow records.
+### POST `/delete-requests/{request_id}/reject`
+- Auth: Yes (admin)
+- Response `200`: rejected status payload
+- Errors: `403`, `404`, `409`
+
+## 6. Storage Design (Local Now, Cloud-Ready)
+- API/router layer uses a storage provider interface (`save/read/exists/delete`).
+- Current backend: local filesystem.
+- Storage backend selection is config-driven:
+  - `STORAGE_BACKEND=local`
+  - `STORAGE_LOCAL_ROOT=./data/uploads`
+- Upload size control:
+  - `UPLOAD_MAX_BYTES` (default 10 MB)
+- Future cloud migration requires adding a new provider implementation, without changing endpoint contracts.
+
+## 7. Notes
+- `created_by_user_id` remains source of truth for actor identity.
+- `created_by_role` in API responses is strictly enum-constrained (`admin`/`user`).
+- Default users remain seeded from configuration on startup.

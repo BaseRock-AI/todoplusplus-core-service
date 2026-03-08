@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.db import get_db
-from app.models import DeleteRequestStatus, User
+from app.models import DeleteRequestStatus, User, UserRole
 from app.repositories import (
     approve_delete_request,
     get_delete_request,
@@ -21,7 +21,7 @@ def get_delete_requests(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[ToDoDeleteRequestOut]:
-    if current_user.role == "admin":
+    if current_user.role == UserRole.ADMIN:
         return list_delete_requests(db, status_filter=status_filter)
     return list_delete_requests(db, requested_by_user_id=current_user.id, status_filter=status_filter)
 

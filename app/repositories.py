@@ -1,12 +1,22 @@
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from app.core.security import get_password_hash
 from app.logging_utils import Events, log_event
-from app.models import Audit, DeleteRequestStatus, ToDoDeleteRequest, ToDoItem, User, UserRole
+from app.models import (
+    AttachmentCategory,
+    Audit,
+    DeleteRequestStatus,
+    ToDoAttachment,
+    ToDoDeleteRequest,
+    ToDoItem,
+    User,
+    UserRole,
+)
 from app.schemas import ToDoCreate, ToDoUpdate
 
 logger = logging.getLogger(__name__)
@@ -24,7 +34,7 @@ def _map_todo_row(todo_row: tuple[int, str, bool, str | None, str | None]) -> di
     }
 
 
-def list_todos(db: Session) -> list[dict]:
+def list_todos(db: Session, completed_filter: bool | None = None) -> list[dict]:
     stmt = (
         select(
             ToDoItem.id,
@@ -36,6 +46,8 @@ def list_todos(db: Session) -> list[dict]:
         .outerjoin(User, ToDoItem.created_by_user_id == User.id)
         .order_by(ToDoItem.id.asc())
     )
+    if completed_filter is not None:
+        stmt = stmt.where(ToDoItem.completed.is_(completed_filter))
     rows = db.execute(stmt).all()
     return [_map_todo_row(row) for row in rows]
 
@@ -78,6 +90,15 @@ def create_todo(db: Session, payload: ToDoCreate, created_by_user_id: int) -> To
     return todo
 
 
+def create_todos_bulk(db: Session, payloads: list[ToDoCreate], created_by_user_id: int) -> list[ToDoItem]:
+    todos = [ToDoItem(name=payload.name, completed=payload.completed, created_by_user_id=created_by_user_id) for payload in payloads]
+    db.add_all(todos)
+    db.commit()
+    for todo in todos:
+        db.refresh(todo)
+    return todos
+
+
 def update_todo(db: Session, todo: ToDoItem, payload: ToDoUpdate) -> ToDoItem:
     if payload.name is not None:
         todo.name = payload.name
@@ -91,6 +112,52 @@ def update_todo(db: Session, todo: ToDoItem, payload: ToDoUpdate) -> ToDoItem:
 def delete_todo(db: Session, todo: ToDoItem) -> None:
     db.delete(todo)
     db.commit()
+
+
+def clear_todos(db: Session, scope: Literal["all", "done", "pending"] = "all") -> int:
+    stmt = select(ToDoItem)
+    if scope == "done":
+        stmt = stmt.where(ToDoItem.completed.is_(True))
+    elif scope == "pending":
+        stmt = stmt.where(ToDoItem.completed.is_(False))
+
+    todos = list(db.scalars(stmt).all())
+    if not todos:
+        return 0
+
+    for todo in todos:
+        db.delete(todo)
+    db.commit()
+    return len(todos)
+
+
+def create_todo_attachment(
+    db: Session,
+    todo_id: int,
+    category: AttachmentCategory,
+    storage_key: str,
+    original_filename: str,
+    content_type: str | None,
+    size_bytes: int,
+    uploaded_by_user_id: int,
+) -> ToDoAttachment:
+    attachment = ToDoAttachment(
+        todo_id=todo_id,
+        category=category,
+        storage_key=storage_key,
+        original_filename=original_filename,
+        content_type=content_type,
+        size_bytes=size_bytes,
+        uploaded_by_user_id=uploaded_by_user_id,
+    )
+    db.add(attachment)
+    db.commit()
+    db.refresh(attachment)
+    return attachment
+
+
+def get_todo_attachment(db: Session, attachment_id: int) -> ToDoAttachment | None:
+    return db.get(ToDoAttachment, attachment_id)
 
 
 def create_delete_request(db: Session, todo_id: int, requested_by_user_id: int) -> ToDoDeleteRequest:
@@ -179,7 +246,7 @@ def get_user_by_username(db: Session, username: str) -> User | None:
     return db.scalar(stmt)
 
 
-def create_user(db: Session, username: str, password: str, role: str) -> User:
+def create_user(db: Session, username: str, password: str, role: UserRole) -> User:
     user = User(
         username=username,
         password_hash=get_password_hash(password),

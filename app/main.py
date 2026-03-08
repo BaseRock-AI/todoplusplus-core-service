@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.consumers import start_consumers, stop_consumers
 from app.core.config import settings
 from app.db import SessionLocal, engine
-from app.db_migrations import migrate_todo_creator_fields
+from app.db_migrations import migrate_todo_creator_fields, migrate_user_role_values
 from app.kafka_client import publisher
 from app.logging_utils import Events, configure_logging, integration_mode, log_event
 from app.models import Base
@@ -46,6 +46,7 @@ async def lifespan(_: FastAPI):
 
     Base.metadata.create_all(bind=engine)
     migrate_todo_creator_fields(engine)
+    migrate_user_role_values(engine)
 
     db = SessionLocal()
     try:

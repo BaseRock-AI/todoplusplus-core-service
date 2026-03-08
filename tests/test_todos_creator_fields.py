@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.dependencies import get_current_user
 from app.db import get_db
-from app.models import Base, ToDoItem, User, UserRole
+from app.models import Base, ToDoDeleteRequest, ToDoItem, User, UserRole
 from app.routers import todos as todos_router_module
 from app.routers.todos import router as todos_router
 
@@ -82,6 +82,87 @@ def test_list_todos_includes_created_by_role_and_username(monkeypatch):
                 "created_by_username": "user",
             },
         ]
+
+
+def test_list_todos_supports_scope_filter(monkeypatch):
+    monkeypatch.setattr(todos_router_module.publisher, "publish", lambda *args, **kwargs: None)
+
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    Base.metadata.create_all(bind=engine)
+
+    with TestingSessionLocal() as db_session:
+        admin, normal_user = _seed_users(db_session)
+        db_session.add_all(
+            [
+                ToDoItem(name="pending a", completed=False, created_by_user_id=admin.id),
+                ToDoItem(name="done a", completed=True, created_by_user_id=normal_user.id),
+                ToDoItem(name="pending b", completed=False, created_by_user_id=normal_user.id),
+            ]
+        )
+        db_session.commit()
+
+        client = _build_client(db_session, current_user_id=normal_user.id)
+
+        done_response = client.get("/todos?scope=done")
+        assert done_response.status_code == 200
+        assert [todo["name"] for todo in done_response.json()] == ["done a"]
+
+        pending_response = client.get("/todos?scope=pending")
+        assert pending_response.status_code == 200
+        assert [todo["name"] for todo in pending_response.json()] == ["pending a", "pending b"]
+
+        default_response = client.get("/todos")
+        assert default_response.status_code == 200
+        assert len(default_response.json()) == 3
+
+
+def test_clear_todos_by_scope_is_allowed_for_non_admin(monkeypatch):
+    monkeypatch.setattr(todos_router_module.publisher, "publish", lambda *args, **kwargs: None)
+
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    Base.metadata.create_all(bind=engine)
+
+    with TestingSessionLocal() as db_session:
+        _admin, normal_user = _seed_users(db_session)
+        db_session.add_all(
+            [
+                ToDoItem(name="pending a", completed=False, created_by_user_id=normal_user.id),
+                ToDoItem(name="done a", completed=True, created_by_user_id=normal_user.id),
+                ToDoItem(name="pending b", completed=False, created_by_user_id=normal_user.id),
+            ]
+        )
+        db_session.commit()
+
+        client = _build_client(db_session, current_user_id=normal_user.id)
+
+        clear_pending = client.delete("/todos/clear?scope=pending")
+        assert clear_pending.status_code == 200
+        assert clear_pending.json() == {"scope": "pending", "deleted_count": 2}
+
+        todos_after_pending_clear = client.get("/todos")
+        assert todos_after_pending_clear.status_code == 200
+        assert todos_after_pending_clear.json()[0]["name"] == "done a"
+
+        clear_all_default = client.delete("/todos/clear")
+        assert clear_all_default.status_code == 200
+        assert clear_all_default.json() == {"scope": "all", "deleted_count": 1}
+
+        todos_after_clear_all = client.get("/todos")
+        assert todos_after_clear_all.status_code == 200
+        assert todos_after_clear_all.json() == []
+        assert db_session.query(ToDoDeleteRequest).count() == 0
 
 
 def test_get_todo_by_id_includes_created_by_fields(monkeypatch):

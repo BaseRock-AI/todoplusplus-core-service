@@ -106,3 +106,12 @@ GET  /delete-requests?status=PENDING
 POST /delete-requests/{request_id}/approve
 POST /delete-requests/{request_id}/reject
 ```
+
+## ToDo Scope Filters and Clear
+- `GET /todos?scope=all|done|pending` (default `scope=all`)
+  - `all`: list all todos
+  - `done`: list only completed todos
+  - `pending`: list only incomplete todos
+- `DELETE /todos/clear?scope=all|done|pending` (default `scope=all`)
+  - Clears todos by scope.
+  - Works for any authenticated role and does not create delete requests.

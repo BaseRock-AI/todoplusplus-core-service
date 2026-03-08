@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 
+from app.models import UserRole
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -9,7 +11,7 @@ class LoginRequest(BaseModel):
 class AuthUser(BaseModel):
     id: int
     username: str
-    role: str
+    role: UserRole
 
 
 class TokenResponse(BaseModel):

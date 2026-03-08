@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.models import DeleteRequestStatus
+
 
 class DeleteTodoActionResponse(BaseModel):
     action: str
@@ -11,7 +13,7 @@ class DeleteTodoActionResponse(BaseModel):
 
 class DeleteRequestDecisionResponse(BaseModel):
     id: int
-    status: str
+    status: DeleteRequestStatus
     todo_id: int
 
 
@@ -21,7 +23,7 @@ class ToDoDeleteRequestOut(BaseModel):
     id: int
     todo_id: int
     requested_by_user_id: int
-    status: str
+    status: DeleteRequestStatus
     reviewed_by_admin_id: int | None
     reviewed_at: datetime | None
     created_at: datetime

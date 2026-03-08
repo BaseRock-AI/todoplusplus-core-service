@@ -40,5 +40,9 @@ class Settings(BaseSettings):
     email_from: str = ""
     email_recipient: str = ""
 
+    storage_backend: str = "local"
+    storage_local_root: str = "./data/uploads"
+    upload_max_bytes: int = 10 * 1024 * 1024
+
 
 settings = Settings()

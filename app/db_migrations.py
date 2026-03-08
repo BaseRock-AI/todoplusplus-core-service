@@ -57,3 +57,24 @@ def migrate_todo_creator_fields(engine: Engine) -> None:
                 text("UPDATE todo_items SET created_by_user_id = :creator_id WHERE created_by_user_id IS NULL"),
                 {"creator_id": creator_id},
             )
+
+
+def migrate_user_role_values(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE users
+                SET role = CASE
+                    WHEN lower(role) = :admin THEN :admin
+                    WHEN lower(role) = :user THEN :user
+                    ELSE :user
+                END
+                """
+            ),
+            {"admin": UserRole.ADMIN.value, "user": UserRole.USER.value},
+        )
