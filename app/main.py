@@ -83,7 +83,3 @@ app.include_router(auth_router)
 app.include_router(todos_router)
 app.include_router(delete_requests_router)
 
-
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
