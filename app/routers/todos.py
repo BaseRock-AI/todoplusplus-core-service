@@ -49,6 +49,34 @@ BULK_IMPORT_EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "assets" / "
 CSV_EXAMPLE_FILENAME = "bulk-import-example.csv"
 JSON_EXAMPLE_FILENAME = "bulk-import-example.json"
 XLSX_EXAMPLE_FILENAME = "bulk-import-example.xlsx"
+BULK_IMPORT_OPENAPI_EXTRA = {
+    "requestBody": {
+        "content": {
+            "application/json": {
+                "schema": {
+                    "oneOf": [
+                        {
+                            "type": "array",
+                            "items": {"$ref": "#/components/schemas/ToDoCreate"},
+                            "title": "ToDoBulkImportItems",
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "items": {
+                                    "type": "array",
+                                    "items": {"$ref": "#/components/schemas/ToDoCreate"},
+                                }
+                            },
+                            "required": ["items"],
+                            "title": "ToDoBulkImportRequest",
+                        },
+                    ]
+                }
+            }
+        }
+    }
+}
 
 
 def _load_example_file_bytes(filename: str) -> bytes:
@@ -251,7 +279,12 @@ def download_bulk_import_json_example(_: User = Depends(get_current_user)) -> Re
     return Response(content=body, media_type="application/json", headers=headers)
 
 
-@router.post("/bulk-import", response_model=ToDoBulkCreateResult, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/bulk-import",
+    response_model=ToDoBulkCreateResult,
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra=BULK_IMPORT_OPENAPI_EXTRA,
+)
 async def bulk_import_todos(
     request: Request,
     file: UploadFile | None = File(default=None),

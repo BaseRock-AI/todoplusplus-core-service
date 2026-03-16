@@ -240,3 +240,28 @@ def test_bulk_import_example_downloads_are_usable(monkeypatch):
         )
         assert xlsx_import.status_code == 201
         assert xlsx_import.json()["created_count"] == 3
+
+
+def test_bulk_import_openapi_supports_json_and_multipart(monkeypatch):
+    monkeypatch.setattr(todos_router_module.publisher, "publish", lambda *args, **kwargs: None)
+
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    Base.metadata.create_all(bind=engine)
+
+    with TestingSessionLocal() as db_session:
+        _admin, normal_user = _seed_users(db_session)
+        client = _build_client(db_session, current_user_id=normal_user.id)
+
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        operation = response.json()["paths"]["/todos/bulk-import"]["post"]
+        content = operation["requestBody"]["content"]
+
+        assert "application/json" in content
+        assert "multipart/form-data" in content
